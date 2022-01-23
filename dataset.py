@@ -8,6 +8,8 @@ import torch
 from pycocotools.coco import COCO
 from tqdm import tqdm
 random.seed(1234)
+import nltk
+import pickle
 
 class Language(Sequence[List[str]]):
     PAD_TOKEN = '<PAD>'
@@ -27,12 +29,10 @@ class Language(Sequence[List[str]]):
         self.idx2word: List[str] = None
 
     def tokenize(self, ann: List):
-        words = ann.split()
-        if '.' in words[-1]:
-            words[-1] = words[-1][:-1]
-        return words
+        tokens = nltk.tokenize.word_tokenize(ann.lower())
+        return tokens
     
-    def build_vocab(self, min_freq: int=1) -> None:
+    def build_vocab(self, min_freq: int=2) -> None:
         SPECIAL_TOKENS: List[str] = [Language.PAD_TOKEN, Language.UNK_TOKEN, Language.SOS_TOKEN, Language.EOS_TOKEN]
         self.idx2word = SPECIAL_TOKENS + [word for word, count in Counter(chain(*self._sentences)).items() if count >= min_freq]
         self.word2idx = {word: idx for idx, word in enumerate(self.idx2word)}
@@ -82,6 +82,7 @@ def preprocess(
 
 
     tgt_sentence = []
+    raw_tgt_sentence = [each_string.lower() for each_string in raw_tgt_sentence]
     
     for word in raw_tgt_sentence:
         if '.' in word:
@@ -114,7 +115,7 @@ def bucketed_batch_indices(
         batch_indices_list += [value[i: i+batch_size] for i in range(0, len(value), batch_size)]
 
     random.shuffle(batch_indices_list)
-    batch_indices_list = [x for x in batch_indices_list if len(x)==batch_size]
+    # batch_indices_list = [x for x in batch_indices_list if len(x)==batch_size]
 
     return batch_indices_list
 
@@ -129,10 +130,10 @@ def collate_fn(
     tgt_sentences = []
     for sample in batched_samples:
         tgt_sentences.append(sample[1])
-
+    caption_lengths = [len(caption)-1 for caption in tgt_sentences]
     tgt_sentences = torch.nn.utils.rnn.pad_sequence(tgt_sentences, batch_first=True)
 
-    return src_images, tgt_sentences
+    return src_images, tgt_sentences, caption_lengths
 
 def get_dataloaders(args):
 
@@ -144,12 +145,14 @@ def get_dataloaders(args):
     annFile='{}/annotations/captions_{}.json'.format(args.dataDir,val_dataType)
     val_coco=COCO(annFile)
 
-    train_imgIds = train_coco.getImgIds()[:200]
-    train_annIds = train_coco.getAnnIds(imgIds=train_imgIds)
+    train_imgIds = train_coco.getImgIds()
+    train_length = len(train_imgIds)*args.dataset_ratio
+    train_annIds = train_coco.getAnnIds(imgIds=train_imgIds[:int(train_length)])
     train_anns = train_coco.loadAnns(train_annIds)
 
-    val_imgIds = val_coco.getImgIds()[:100]
-    val_annIds = val_coco.getAnnIds(imgIds=val_imgIds)
+    val_imgIds = val_coco.getImgIds()
+    val_length = len(val_imgIds)*args.dataset_ratio
+    val_annIds = val_coco.getAnnIds(imgIds=val_imgIds[:int(val_length)])
     val_anns = val_coco.loadAnns(val_annIds)
 
     vocab = Language(train_anns)
@@ -159,13 +162,18 @@ def get_dataloaders(args):
     val_dataset = NMTDataset(val_anns, vocab, val_coco, args.dataDir, val_dataType)
 
     print("calculating sentence length...")
-    train_sentence_length = list(map(lambda x: len(x[1]), tqdm(train_dataset)))
-    val_sentence_length = list(map(lambda x: len(x[1]), tqdm(val_dataset)))
+    with open("train_sentence_length", "rb") as fp:
+        train_sentence_length = pickle.load(fp)
+    with open("val_sentence_length", "rb") as fp:
+        val_sentence_length = pickle.load(fp)
+    print(f"train: {len(train_sentence_length[:len(train_anns)])}, val: {len(val_sentence_length[:len(val_anns)])}")
+    # train_sentence_length = list(map(lambda x: len(x[1]), tqdm(train_dataset)))
+    # val_sentence_length = list(map(lambda x: len(x[1]), tqdm(val_dataset)))
 
     max_pad_len = 5
 
-    train_dataloader = torch.utils.data.dataloader.DataLoader(train_dataset, collate_fn=collate_fn, num_workers=2, batch_sampler=bucketed_batch_indices(train_sentence_length, batch_size=args.batch_size, max_pad_len=max_pad_len))
-    val_dataloader = torch.utils.data.dataloader.DataLoader(val_dataset, collate_fn=collate_fn, num_workers=2, batch_sampler=bucketed_batch_indices(val_sentence_length, batch_size=args.batch_size, max_pad_len=max_pad_len))
+    train_dataloader = torch.utils.data.dataloader.DataLoader(train_dataset, collate_fn=collate_fn, num_workers=2, batch_sampler=bucketed_batch_indices(train_sentence_length[:len(train_anns)], batch_size=args.batch_size, max_pad_len=max_pad_len))
+    val_dataloader = torch.utils.data.dataloader.DataLoader(val_dataset, collate_fn=collate_fn, num_workers=2, batch_sampler=bucketed_batch_indices(val_sentence_length[:len(val_anns)], batch_size=args.batch_size, max_pad_len=max_pad_len))
 
     return train_dataloader, val_dataloader, len(vocab.word2idx)
 
