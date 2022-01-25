@@ -6,7 +6,6 @@ from PIL import Image
 import random
 import torch
 from pycocotools.coco import COCO
-from tqdm import tqdm
 random.seed(1234)
 import nltk
 import pickle
