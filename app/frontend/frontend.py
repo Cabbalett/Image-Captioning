@@ -5,6 +5,7 @@ import requests
 
 from PIL import Image
 import numpy as np
+import time
 
 st.set_page_config(layout="wide")
 
@@ -28,12 +29,8 @@ def main():
                     ('files', (uploaded_file.name, image_bytes,
                                uploaded_file.type))
                 ]
-                response = requests.post("http://localhost:8001/order", files=files)
-            try:
-                result = response.content.decode('utf-8')
-            except:
-                st.error("No object was detected!")
-                return
+            response = requests.post("http://localhost:8000/order", files=files)
+            result = response.content.decode('utf-8')
             st.text(str(result))
             st.success("Success!")
 
