@@ -26,7 +26,7 @@ def hello_world():
 async def make_order(files: List[UploadFile] = File(...)):
     for file in files:
         image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes))
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         sentence = inference(image)
 
     return sentence
